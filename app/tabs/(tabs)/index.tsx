@@ -7,8 +7,7 @@ import { Text } from '@/components/ui/text';
 import { Heading } from '@/components/ui/heading';
 import { Card } from '@/components/ui/card';
 import { Button, ButtonText } from '@/components/ui/button';
-import { Badge, BadgeText } from '@/components/ui/badge';
-import { Divider } from '@/components/ui/divider';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Icon,
   UsersIcon,
@@ -23,52 +22,8 @@ import {
 import { useRouter } from 'expo-router';
 import { AppHeader } from '@/components/app-header';
 import { SafeAreaView } from '@/components/ui/safe-area-view';
-
-// Mock data
-const mockMitarbeiter = {
-  name: 'Max Mustermann',
-  gruppe: 'Via Annie',
-};
-
-const mockAnkündigungen = [
-  {
-    id: 1,
-    title: 'Team Meeting am Freitag',
-    content: 'Bitte alle Teilnehmer um 14:00 Uhr im Konferenzraum.',
-    date: '2024-01-15',
-    type: 'meeting' as const,
-    read: false,
-    priority: 'high' as const,
-  },
-  {
-    id: 2,
-    title: 'System Update',
-    content: 'Das System wird am Wochenende aktualisiert.',
-    date: '2024-01-14',
-    type: 'system' as const,
-    read: true,
-    priority: 'medium' as const,
-  },
-];
-
-const mockEmails = [
-  {
-    id: 1,
-    from: 'Anna Schmidt',
-    subject: 'Wichtige Information',
-    preview: 'Bitte um Rückmeldung bis morgen...',
-    date: '2024-01-15',
-    unread: true,
-  },
-  {
-    id: 2,
-    from: 'Peter Müller',
-    subject: 'Terminbestätigung',
-    preview: 'Ihr Termin wurde bestätigt...',
-    date: '2024-01-14',
-    unread: false,
-  },
-];
+import { getUserInfo } from '@/lib/api';
+import { getToken, getCachedUserInfo, saveUserInfo } from '@/lib/auth';
 
 const exploreLinks = [
   { name: 'Ausweis', icon: UsersIcon, url: 'https://example.com/ausweis' },
@@ -88,6 +43,9 @@ export default function HomePage() {
   const router = useRouter();
   const [showWave, setShowWave] = useState(false);
   const waveAnim = useRef(new Animated.Value(0)).current;
+  const [userName, setUserName] = useState<string>('');
+  const [gruppen, setGruppen] = useState<{ id: number; name: string | null }[]>([]);
+  const [isLoadingUser, setIsLoadingUser] = useState(true);
 
   useEffect(() => {
     setShowWave(true);
@@ -110,6 +68,80 @@ export default function HomePage() {
       setShowWave(false);
     });
   }, [waveAnim]);
+
+  // Benutzerinformationen laden - zuerst aus Cache, dann von API aktualisieren
+  useEffect(() => {
+    const loadUserInfo = async () => {
+      try {
+        // Zuerst versuchen, aus Cache zu laden (sofortige Anzeige, kein Lade-Spinner)
+        const cachedUserInfo = await getCachedUserInfo();
+        if (cachedUserInfo) {
+          if (cachedUserInfo.mitarbeiter) {
+            const fullName = [
+              cachedUserInfo.mitarbeiter.vorname,
+              cachedUserInfo.mitarbeiter.name,
+            ]
+              .filter(Boolean)
+              .join(' ');
+            setUserName(fullName || cachedUserInfo.user.name || '');
+          } else {
+            setUserName(cachedUserInfo.user.name || '');
+          }
+          // Gruppen aus Cache setzen
+          setGruppen(cachedUserInfo.gruppen || []);
+          setIsLoadingUser(false); // Ladeanzeige sofort ausblenden, wenn Cache vorhanden
+        } else {
+          // Kein Cache, Ladeanzeige während des Abrufens anzeigen
+          setIsLoadingUser(true);
+        }
+
+        // Dann frische Daten von API im Hintergrund abrufen
+        const token = await getToken();
+        if (!token) {
+          if (!cachedUserInfo) {
+            setUserName('');
+            setIsLoadingUser(false);
+          }
+          return;
+        }
+
+        try {
+          const userInfo = await getUserInfo(token);
+          // Für nächstes Mal im Cache speichern
+          await saveUserInfo(userInfo);
+          
+          // UI mit frischen Daten aktualisieren
+          if (userInfo.mitarbeiter) {
+            const fullName = [
+              userInfo.mitarbeiter.vorname,
+              userInfo.mitarbeiter.name,
+            ]
+              .filter(Boolean)
+              .join(' ');
+            setUserName(fullName || userInfo.user.name || '');
+          } else {
+            setUserName(userInfo.user.name || '');
+          }
+          // Gruppen aktualisieren
+          setGruppen(userInfo.gruppen || []);
+        } catch (error) {
+          console.error('Error fetching fresh user info:', error);
+          // Wenn API fehlschlägt, aber Cache vorhanden ist, Cache weiterhin anzeigen
+          if (!cachedUserInfo) {
+            setUserName('');
+          }
+        } finally {
+          setIsLoadingUser(false);
+        }
+      } catch (error) {
+        console.error('Error loading user info:', error);
+        setUserName('');
+        setIsLoadingUser(false);
+      }
+    };
+
+    loadUserInfo();
+  }, []);
 
   const waveBaseStyle = useMemo(
     () => ({
@@ -146,7 +178,7 @@ export default function HomePage() {
       <AppHeader />
       <ScrollView className="flex-1">
         <VStack className="p-4 gap-6">
-          {/* Welcome Section */}
+          {/* Willkommens-Bereich */}
           <Card variant="elevated" size="md" className="p-6 overflow-visible">
             <Box className="relative">
               <VStack className="gap-2">
@@ -156,18 +188,43 @@ export default function HomePage() {
                   </Heading>
                   <Text className="text-typography-600">
                     Schönen Tag,{" "}
-                    <Text className="font-semibold text-typography-900">
-                      {mockMitarbeiter.name}
-                    </Text>
+                    {isLoadingUser ? (
+                      <Spinner size="small" />
+                    ) : (
+                      <Text className="font-semibold text-typography-900">
+                        {userName || 'Benutzer'}
+                      </Text>
+                    )}
                   </Text>
+                  {/* Gruppen-Anzeige */}
+                  {gruppen.length > 0 && (
+                    <Pressable
+                      onPress={() => {
+                        if (gruppen.length > 1) {
+                          // Timestamp hinzufügen, um sicherzustellen, dass Effekt jedes Mal ausgeführt wird
+                          router.push(`/tabs/profile?scrollTo=gruppen&t=${Date.now()}`);
+                        }
+                      }}
+                      disabled={gruppen.length === 1}
+                    >
+                      <HStack className="items-center gap-2 mt-1">
+                        <Text className="text-typography-500 text-sm">
+                          {gruppen[0].name || 'Gruppe'}
+                        </Text>
+                        {gruppen.length > 1 && (
+                          <HStack className="items-center gap-1">
+                            <Icon as={UsersIcon} size="xs" className="text-typography-400" />
+                            <Text className="text-typography-400 text-xs">
+                              +{gruppen.length - 1} weitere
+                            </Text>
+                            <Icon as={ChevronRightIcon} size="xs" className="text-typography-400" />
+                          </HStack>
+                        )}
+                      </HStack>
+                    </Pressable>
+                  )}
                 </VStack>
 
-                <HStack className="items-center gap-2 pt-1">
-                  <Icon as={UsersIcon} size="sm" className="text-secondary-500" />
-                  <Text className="text-sm italic text-typography-500">
-                    {mockMitarbeiter.gruppe}
-                  </Text>
-                </HStack>
               </VStack>
 
               {showWave && (
@@ -191,29 +248,9 @@ export default function HomePage() {
               </Button>
             </HStack>
             <VStack className="gap-3">
-              {mockAnkündigungen.map((announcement) => (
-                <Box key={announcement.id}>
-                  <HStack className="items-start gap-2 mb-1">
-                    {!announcement.read && (
-                      <Badge size="sm" action="info" variant="solid">
-                        <BadgeText>Neu</BadgeText>
-                      </Badge>
-                    )}
-                    <VStack className="flex-1">
-                      <Text className="font-semibold text-typography-900">
-                        {announcement.title}
-                      </Text>
-                      <Text className="text-typography-600 text-sm" numberOfLines={2}>
-                        {announcement.content}
-                      </Text>
-                      <Text className="text-typography-500 text-xs mt-1">
-                        {announcement.date}
-                      </Text>
-                    </VStack>
-                  </HStack>
-                  {announcement.id !== mockAnkündigungen.length && <Divider className="my-2" />}
-                </Box>
-              ))}
+              <Text className="text-typography-500 text-sm text-center py-4">
+                Keine Ankündigungen vorhanden
+              </Text>
             </VStack>
           </Card>
 
@@ -226,32 +263,13 @@ export default function HomePage() {
               </Button>
             </HStack>
             <VStack className="gap-3">
-              {mockEmails.map((email) => (
-                <Box key={email.id}>
-                  <HStack className="items-start gap-2">
-                    <VStack className="flex-1">
-                      <Text className="font-semibold text-typography-900">{email.from}</Text>
-                      <HStack className="items-center gap-2">
-                        <Text className="text-typography-900">{email.subject}</Text>
-                        {email.unread && (
-                          <Text className="text-secondary-500 text-xs uppercase tracking-[2px]">
-                            Ungelesen
-                          </Text>
-                        )}
-                      </HStack>
-                      <Text className="text-typography-600 text-sm" numberOfLines={1}>
-                        {email.preview}
-                      </Text>
-                      <Text className="text-typography-500 text-xs mt-1">{email.date}</Text>
-                    </VStack>
-                  </HStack>
-                  {email.id !== mockEmails.length && <Divider className="my-2" />}
-                </Box>
-              ))}
+              <Text className="text-typography-500 text-sm text-center py-4">
+                Keine E-Mails vorhanden
+              </Text>
             </VStack>
           </Card>
 
-          {/* Explore Section */}
+          {/* Bereiche-Bereich */}
           <Card variant="elevated" size="md" className="p-4">
             <Heading className="text-lg font-semibold mb-4">Bereiche</Heading>
             <VStack className="gap-1.5">
