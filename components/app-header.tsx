@@ -4,10 +4,13 @@ import { HStack } from '@/components/ui/hstack';
 import { Button } from '@/components/ui/button';
 import { Icon, BellIcon, MoonIcon, SunIcon } from '@/components/ui/icon';
 import { useTheme } from '@/contexts/ThemeContext';
-import { Image } from 'react-native';
+import { Image, Alert, Platform } from 'react-native';
 import { createIcon } from '@/components/ui/icon';
 import { Path } from 'react-native-svg';
 import { Svg } from 'react-native-svg';
+import { useRouter } from 'expo-router';
+import { logout } from '@/lib/api';
+import { getToken, clearAuthData } from '@/lib/auth';
 
 // Logout Icon
 const LogoutIcon = createIcon({
@@ -41,6 +44,40 @@ LogoutIcon.displayName = 'LogoutIcon';
 
 export function AppHeader() {
   const { colorMode, toggleColorMode } = useTheme();
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    const performLogout = async () => {
+      try {
+        const token = await getToken();
+        if (token) {
+          await logout(token);
+        }
+      } catch (error) {
+        console.error('Logout error:', error);
+      } finally {
+        await clearAuthData();
+        router.replace('/login');
+      }
+    };
+
+    // Web'de window.confirm kullan, mobil'de Alert.alert kullan
+    if (Platform.OS === 'web') {
+      const confirmed = window.confirm('Möchten Sie sich wirklich abmelden?');
+      if (confirmed) {
+        await performLogout();
+      }
+    } else {
+      Alert.alert('Abmelden', 'Möchten Sie sich wirklich abmelden?', [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Abmelden',
+          style: 'destructive',
+          onPress: performLogout,
+        },
+      ]);
+    }
+  };
 
   return (
     <Box className="bg-background-0 border-b border-outline-200 px-4 py-3">
@@ -85,9 +122,7 @@ export function AppHeader() {
               size="sm"
               variant="link"
               action="negative"
-              onPress={() => {
-                alert('Abmelden');
-              }}
+              onPress={handleLogout}
               className="p-2"
             >
               <Icon
